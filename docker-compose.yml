@@ -1,4 +1,3 @@
-version: "3.9"
 
 services:
   db:
@@ -28,7 +27,7 @@ services:
     environment:
       PORT: "8080"
       GIN_MODE: "release"
-      # Внутри сети compose хост БД — это имя сервиса "db"
+      # Внутри сети compose хост БД это имя сервиса "db"
       DB_DSN: "postgresql://postgres:${POSTGRES_PASSWORD:-pass}@db:5432/${POSTGRES_DB:-tickers}?sslmode=disable"
     depends_on:
       db:

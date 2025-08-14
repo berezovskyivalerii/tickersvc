@@ -1,6 +1,0 @@
-BEGIN;
-DROP TABLE IF EXISTS incoming_tickers;
-DROP TABLE IF EXISTS tickers;
-DROP TABLE IF EXISTS projects;
-DROP TABLE IF EXISTS exchanges;
-COMMIT;
