@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: example
+      POSTGRES_DB: tickers
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  app:
+    build: .
+    environment:
+      DB_DSN: "host=db user=postgres password=example dbname=tickers sslmode=disable"
+      PORT: "8080"
+    depends_on:
+      - db
+    restart: always
+volumes:
+  pgdata: {}
