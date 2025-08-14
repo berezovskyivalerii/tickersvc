@@ -1,18 +1,41 @@
+version: "3.9"
+
 services:
   db:
     image: postgres:15
     environment:
-      POSTGRES_PASSWORD: example
-      POSTGRES_DB: tickers
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DB: ${POSTGRES_DB:-tickers}
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-tickers}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   app:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     environment:
-      DB_DSN: "host=db user=postgres password=example dbname=tickers sslmode=disable"
       PORT: "8080"
+      GIN_MODE: "release"
+      # Внутри сети compose хост БД — это имя сервиса "db"
+      DB_DSN: "postgresql://postgres:${POSTGRES_PASSWORD:-pass}@db:5432/${POSTGRES_DB:-tickers}?sslmode=disable"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
     restart: always
+
 volumes:
   pgdata: {}
