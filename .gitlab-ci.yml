@@ -68,10 +68,10 @@ migrate:
   stage: migrate
   image: golang:1.24
   variables:
-    # DB_DSN в Settings → CI/CD → Variables (masked, protected)
     DB_DSN: $DB_DSN
   script:
     - go install github.com/pressly/goose/v3/cmd/goose@latest
+    - export DB_DSN="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSLMODE}"
     - goose -dir ./migrations postgres "$DB_DSN" up
   needs: ["docker-build"]
   rules:
@@ -117,6 +117,7 @@ db_backup:
     - apt-get update && apt-get install -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
     - TS=$(date -u +%Y%m%dT%H%M%SZ)
     - FILE="db-${TS}.dump"
+    - export DB_DSN="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSLMODE}"
     - pg_dump --format=custom --no-owner --no-privileges --dbname="$DB_DSN" --file="$FILE"
     - echo "Created $FILE"
   artifacts:
