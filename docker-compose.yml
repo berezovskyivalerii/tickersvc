@@ -1,17 +1,16 @@
-
 services:
   db:
     image: postgres:15
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
-      POSTGRES_DB: ${POSTGRES_DB:-tickers}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-tickers}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -21,22 +20,27 @@ services:
     build:
       context: .
       args:
-        VERSION: ${VERSION:-dev}
-        COMMIT: ${COMMIT:-dev}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
+        VERSION: ${VERSION}
+        COMMIT: ${COMMIT}
+        BUILD_TIME: ${BUILD_TIME}
     environment:
-      PORT: "8080"
-      GIN_MODE: "release"
-      # Внутри сети compose хост БД это имя сервиса "db"
-      DB_DSN: "postgresql://postgres:${POSTGRES_PASSWORD:-pass}@db:5432/${POSTGRES_DB:-tickers}?sslmode=disable"
-      ADMIN_API_KEY: supersecret
-      ADMIN_TRUSTED_CIDRS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128
-      ADMIN_REQUIRE_BOTH: 0
+      PORT: ${PORT}
+      GIN_MODE: ${GIN_MODE}
+      DB_DSN: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      ADMIN_TRUSTED_CIDRS: ${ADMIN_TRUSTED_CIDRS}
+      ADMIN_REQUIRE_BOTH: ${ADMIN_REQUIRE_BOTH}
+      EXCLUDE_EXCHANGES: ${EXCLUDE_EXCHANGES}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT}
+      HTTP_RETRIES: ${HTTP_RETRIES}
+      HTTP_BACKOFF_MIN: ${HTTP_BACKOFF_MIN}
+      HTTP_BACKOFF_MAX: ${HTTP_BACKOFF_MAX}
+      HTTP_USER_AGENT: ${HTTP_USER_AGENT}
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${PORT}:${PORT}"
     restart: always
 
 volumes:
