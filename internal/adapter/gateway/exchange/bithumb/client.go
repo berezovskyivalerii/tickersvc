@@ -3,65 +3,66 @@ package bithumb
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"fmt"
 
 	"github.com/berezovskyivalerii/tickersvc/internal/adapter/gateway/exchange/common"
-	"github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
+	dm "github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 )
 
 const ExchangeID int16 = 6
 
 type Client struct{ c *common.Client }
 
-func New() *Client { return &Client{c: common.New("https://api.bithumb.com")} }
-
-func NewWithBaseURL(base string) *Client {
-	return &Client{c: common.New(base)}
-}
+func New() *Client  { return &Client{c: common.NewWith("https://api.bithumb.com", common.DefaultOptionsFromEnv())} }
+func NewWithBaseURL(base string) *Client { return &Client{c: common.NewWith(base, common.DefaultOptionsFromEnv())} }
 
 func (Client) ExchangeID() int16 { return ExchangeID }
 func (Client) Name() string      { return "bithumb" }
 
 type allResp struct {
-	Status string          `json:"status"` // "0000"
-	Data   json.RawMessage `json:"data"`   // object with coins's keys + "date"
+	Status string                 `json:"status"` // "0000"
+	Data   map[string]json.RawMessage `json:"data"`
 }
 
-func (cl *Client) fetchAll(ctx context.Context, quote string) ([]markets.Item, error) {
-	var v allResp
-	path := "/public/ticker/ALL_" + quote
-	if quote == "" { path = "/public/ticker/ALL" } // KRW по умолчанию
-	if err := cl.c.GetJSON(ctx, path, &v); err != nil {
-		return nil, err
+// /public/ticker/ALL       → KRW-маркет
+// /public/ticker/ALL_USDT  → USDT-маркет
+func (cl *Client) FetchSpot(ctx context.Context) ([]dm.Item, error) {
+	items := make([]dm.Item, 0, 1024)
+
+	parse := func(path, quote string) error {
+		var v allResp
+		if err := cl.c.GetJSON(ctx, path, nil, &v); err != nil {
+			return err
+		}
+		if v.Status != "0000" {
+			return fmt.Errorf("bithumb status=%s", v.Status)
+		}
+		for k, raw := range v.Data {
+			if k == "date" { // служебное поле
+				continue
+			}
+			// если объект, значит монета присутствует
+			var tmp map[string]any
+			if err := json.Unmarshal(raw, &tmp); err == nil && len(tmp) > 0 {
+				items = append(items, dm.Item{
+					ExchangeID: cl.ExchangeID(),
+					Type:       dm.TypeSpot,
+					Symbol:     k + "-" + quote, // "AAA-KRW" / "BBB-USDT"
+					Base:       k,
+					Quote:      quote,
+					Active:     true,
+				})
+			}
+		}
+		return nil
 	}
-	// data — object: { "BTC": {...}, "ETH": {...}, "date": "..." }
-	m := map[string]json.RawMessage{}
-	if err := json.Unmarshal(v.Data, &m); err != nil {
-		return nil, err
-	}
-	out := make([]markets.Item, 0, len(m))
-	for base := range m {
-		if strings.EqualFold(base, "date") { continue }
-		q := "KRW"
-		if quote != "" { q = strings.ToUpper(quote) }
-		// Fix symbol as BASE-QUOTE
-		out = append(out, markets.Item{
-			ExchangeID: ExchangeID, Type: markets.TypeSpot,
-			Symbol: strings.ToUpper(base) + "-" + q,
-			Base: strings.ToUpper(base), Quote: q, Active: true,
-		})
-	}
-	return out, nil
+
+	_ = parse("/public/ticker/ALL", "KRW")
+	_ = parse("/public/ticker/ALL_USDT", "USDT")
+
+	return items, nil
 }
 
-func (cl *Client) FetchSpot(ctx context.Context) ([]markets.Item, error) {
-	krw, err := cl.fetchAll(ctx, "")
-	if err != nil { return nil, err }
-	usdt, _ := cl.fetchAll(ctx, "USDT") // if not - ignore
-	btc, _  := cl.fetchAll(ctx, "BTC")
-	return append(append(krw, usdt...), btc...), nil
-}
-
-func (cl *Client) FetchFutures(ctx context.Context) ([]markets.Item, error) {
+func (cl *Client) FetchFutures(ctx context.Context) ([]dm.Item, error) {
 	return nil, nil
 }

@@ -14,6 +14,7 @@ type Def struct {
 type DefsRepo interface {
 	// Вreturn list definitions optionally filtered by source/target slug
 	Find(ctx context.Context, sourceSlug, targetSlug *string) ([]Def, error)
+	GetByID(ctx context.Context, id int16) (Def, error)
 }
 
 type QueryRepo interface {

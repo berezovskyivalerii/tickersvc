@@ -2,76 +2,99 @@ package bybit
 
 import (
 	"context"
+	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/berezovskyivalerii/tickersvc/internal/adapter/gateway/exchange/common"
-	"github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
+	dm "github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 )
 
 const ExchangeID int16 = 2
 
 type Client struct{ c *common.Client }
 
-func New() *Client { return &Client{c: common.New("https://api.bybit.com")} }
-
+func New() *Client {
+	return &Client{c: common.NewWith("https://api.bybit.com", common.DefaultOptionsFromEnv())}
+}
 func NewWithBaseURL(base string) *Client {
-	return &Client{c: common.New(base)}
+	return &Client{c: common.NewWith(base, common.DefaultOptionsFromEnv())}
 }
 
 func (Client) ExchangeID() int16 { return ExchangeID }
 func (Client) Name() string      { return "bybit" }
 
-type instrumentsResp struct {
+type instResp struct {
 	RetCode int `json:"retCode"`
 	Result  struct {
 		Category string `json:"category"`
 		List     []struct {
-			Symbol        string `json:"symbol"`
-			BaseCoin      string `json:"baseCoin"`
-			QuoteCoin     string `json:"quoteCoin"`
-			Status        string `json:"status"` // Trading
-			ContractSize  string `json:"contractSize"`
+			Symbol       string `json:"symbol"`
+			BaseCoin     string `json:"baseCoin"`
+			QuoteCoin    string `json:"quoteCoin"`
+			Status       string `json:"status"` // Trading
+			ContractSize string `json:"contractSize"`
 		} `json:"list"`
 	} `json:"result"`
 }
 
-func (cl *Client) fetchCategory(ctx context.Context, cat string) ([]markets.Item, error) {
-	var v instrumentsResp
-	if err := cl.c.GetJSON(ctx, "/v5/market/instruments-info?category="+cat, &v); err != nil {
+func (cl *Client) FetchSpot(ctx context.Context) ([]dm.Item, error) {
+	var out instResp
+	if err := cl.c.GetJSON(ctx, "/v5/market/instruments-info", map[string]string{"category": "spot"}, &out); err != nil {
 		return nil, err
 	}
-	out := make([]markets.Item, 0, len(v.Result.List))
-	for _, it := range v.Result.List {
-		active := strings.EqualFold(it.Status, "Trading")
-		var csz *int64
+	if out.RetCode != 0 {
+		return nil, fmt.Errorf("bybit retCode=%d", out.RetCode)
+	}
+	items := make([]dm.Item, 0, len(out.Result.List))
+	for _, it := range out.Result.List {
+		if it.Status != "Trading" {
+			continue
+		}
+		items = append(items, dm.Item{
+			ExchangeID: cl.ExchangeID(),
+			Type:       dm.TypeSpot,
+			Symbol:     it.Symbol,
+			Base:       it.BaseCoin,
+			Quote:      it.QuoteCoin,
+			Active:     true,
+		})
+	}
+	return items, nil
+}
+
+func (cl *Client) FetchFutures(ctx context.Context) ([]dm.Item, error) {
+	var out instResp
+	if err := cl.c.GetJSON(ctx, "/v5/market/instruments-info", map[string]string{"category": "linear"}, &out); err != nil {
+		return nil, err
+	}
+	if out.RetCode != 0 {
+		return nil, fmt.Errorf("bybit retCode=%d", out.RetCode)
+	}
+	items := make([]dm.Item, 0, len(out.Result.List))
+	for _, it := range out.Result.List {
+		if it.Status != "Trading" {
+			continue
+		}
+		// parse contractSize if present and integral
+		var cs *int64
 		if it.ContractSize != "" {
-			if f, err := strconv.ParseFloat(it.ContractSize, 64); err == nil && f > 0 {
-				x := int64(f)
-				if float64(x) == f {
-					csz = &x
+			if f, err := strconv.ParseFloat(it.ContractSize, 64); err == nil {
+				if f == float64(int64(f)) {
+					v := int64(f)
+					cs = &v
 				}
 			}
 		}
-		mt := markets.TypeSpot
-		if cat == "linear" || cat == "inverse" { mt = markets.TypeFutures }
-		out = append(out, markets.Item{
-			ExchangeID: ExchangeID, Type: mt, Symbol: it.Symbol,
-			Base: strings.ToUpper(it.BaseCoin), Quote: strings.ToUpper(it.QuoteCoin),
-			ContractSize: csz, Active: active,
+		items = append(items, dm.Item{
+			ExchangeID:  cl.ExchangeID(),
+			Type:        dm.TypeFutures,
+			Symbol:      it.Symbol,
+			Base:        it.BaseCoin,
+			Quote:       it.QuoteCoin,
+			ContractSize: cs,
+			Active:      true,
 		})
 	}
-	return out, nil
+	return items, nil
 }
 
-func (cl *Client) FetchSpot(ctx context.Context) ([]markets.Item, error) {
-	return cl.fetchCategory(ctx, "spot")
-}
-
-func (cl *Client) FetchFutures(ctx context.Context) ([]markets.Item, error) {
-	lin, err := cl.fetchCategory(ctx, "linear")
-	if err != nil { return nil, err }
-	inv, err := cl.fetchCategory(ctx, "inverse")
-	if err != nil { return lin, nil } // a part of exchanges can have not a inverse
-	return append(lin, inv...), nil
-}

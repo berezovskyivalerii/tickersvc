@@ -13,16 +13,6 @@ type Updater struct {
 	Saver  Saver           // lists saver (ReplaceBySlug)
 }
 
-func modeForTarget(targetSlug string) string {
-	switch targetSlug {
-	case "upbit": return "upbit"
-	case "bithumb": return "bithumb"
-	case "coinbase": return "coinbase"
-	case "binance": return "binance"
-	default: return "coinbase"
-	}
-}
-
 // Обновить списки по фильтрам (nil => все)
 func (u *Updater) Update(ctx context.Context, sourceSlug, targetSlug *string) (map[string]int, error) {
 	defs, err := u.Defs.Find(ctx, sourceSlug, targetSlug)

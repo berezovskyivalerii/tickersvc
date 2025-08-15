@@ -29,6 +29,9 @@ services:
       GIN_MODE: "release"
       # Внутри сети compose хост БД это имя сервиса "db"
       DB_DSN: "postgresql://postgres:${POSTGRES_PASSWORD:-pass}@db:5432/${POSTGRES_DB:-tickers}?sslmode=disable"
+      ADMIN_API_KEY: supersecret
+      ADMIN_TRUSTED_CIDRS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128
+      ADMIN_REQUIRE_BOTH: 0
     depends_on:
       db:
         condition: service_healthy

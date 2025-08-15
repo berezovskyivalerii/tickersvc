@@ -5,16 +5,33 @@ import (
 	"strings"
 
 	"github.com/berezovskyivalerii/tickersvc/internal/adapter/gateway/exchange/common"
-	"github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
+	dm "github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 )
 
-const (
-	ExchangeID int16 = 1
-)
+const ExchangeID int16 = 1
 
-type Client struct{ c *common.Client }
+type Client struct {
+	spot *common.Client
+	fut  *common.Client
+}
 
-func New() *Client { return &Client{c: common.New("https://api.binance.com")} }
+func New() *Client {
+	opt := common.DefaultOptionsFromEnv()
+	return &Client{
+		spot: common.NewWith("https://api.binance.com", opt),
+		fut:  common.NewWith("https://fapi.binance.com", opt), // USD-M
+	}
+}
+
+// тесты/DI
+func NewWithBaseURL(spotBase, futuresBase string) *Client {
+	opt := common.DefaultOptionsFromEnv()
+	return &Client{
+		spot: common.NewWith(spotBase, opt),
+		fut:  common.NewWith(futuresBase, opt),
+	}
+}
+
 func (Client) ExchangeID() int16 { return ExchangeID }
 func (Client) Name() string      { return "binance" }
 
@@ -27,25 +44,34 @@ type exInfo struct {
 	} `json:"symbols"`
 }
 
-func (cl *Client) FetchSpot(ctx context.Context) ([]markets.Item, error) {
+func (cl *Client) FetchSpot(ctx context.Context) ([]dm.Item, error) {
 	var v exInfo
-	if err := cl.c.GetJSON(ctx, "/api/v3/exchangeInfo", &v); err != nil {
+	if err := cl.spot.GetJSON(ctx, "/api/v3/exchangeInfo", nil, &v); err != nil {
 		return nil, err
 	}
-	out := make([]markets.Item, 0, len(v.Symbols))
+	out := make([]dm.Item, 0, len(v.Symbols))
 	for _, s := range v.Symbols {
+		base, quote := s.Base, s.Quote
+		if base == "" || quote == "" {
+			if b, q, ok := common.SplitKnownQuote(s.Symbol, common.CommonQuoteSet); ok {
+				base, quote = b, q
+			}
+		}
 		active := strings.EqualFold(s.Status, "TRADING")
-		out = append(out, markets.Item{
-			ExchangeID: cl.ExchangeID(), Type: markets.TypeSpot,
-			Symbol: s.Symbol, Base: s.Base, Quote: s.Quote,
-			Active: active,
+		out = append(out, dm.Item{
+			ExchangeID: cl.ExchangeID(),
+			Type:       dm.TypeSpot,
+			Symbol:     s.Symbol,
+			Base:       base,
+			Quote:      quote,
+			Active:     active,
 		})
 	}
 	return out, nil
 }
 
-// USD-M фьючерсы (perps): https://fapi.binance.com/fapi/v1/exchangeInfo
-func (cl *Client) FetchFutures(ctx context.Context) ([]markets.Item, error) {
+// USD-M futures (perps): https://fapi.binance.com/fapi/v1/exchangeInfo
+func (cl *Client) FetchFutures(ctx context.Context) ([]dm.Item, error) {
 	type finfo struct {
 		Symbols []struct {
 			Symbol string `json:"symbol"`
@@ -55,17 +81,25 @@ func (cl *Client) FetchFutures(ctx context.Context) ([]markets.Item, error) {
 		} `json:"symbols"`
 	}
 	var v finfo
-	c := common.New("https://fapi.binance.com")
-	if err := c.GetJSON(ctx, "/fapi/v1/exchangeInfo", &v); err != nil {
+	if err := cl.fut.GetJSON(ctx, "/fapi/v1/exchangeInfo", nil, &v); err != nil {
 		return nil, err
 	}
-	out := make([]markets.Item, 0, len(v.Symbols))
+	out := make([]dm.Item, 0, len(v.Symbols))
 	for _, s := range v.Symbols {
+		base, quote := s.Base, s.Quote
+		if base == "" || quote == "" {
+			if b, q, ok := common.SplitKnownQuote(s.Symbol, common.CommonQuoteSet); ok {
+				base, quote = b, q
+			}
+		}
 		active := strings.EqualFold(s.Status, "TRADING")
-		out = append(out, markets.Item{
-			ExchangeID: cl.ExchangeID(), Type: markets.TypeFutures,
-			Symbol: s.Symbol, Base: s.Base, Quote: s.Quote,
-			Active: active,
+		out = append(out, dm.Item{
+			ExchangeID: cl.ExchangeID(),
+			Type:       dm.TypeFutures,
+			Symbol:     s.Symbol,
+			Base:       base,
+			Quote:      quote,
+			Active:     active,
 		})
 	}
 	return out, nil

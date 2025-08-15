@@ -1,7 +1,7 @@
 package app
 
 import (
-	"log/slog"
+	"context"
 	"os"
 	"strings"
 	"time"
@@ -22,7 +22,7 @@ import (
 	healthdom "github.com/berezovskyivalerii/tickersvc/internal/domain/health"
 	marketsdom "github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 	httpinfra "github.com/berezovskyivalerii/tickersvc/internal/infra/http"
-	"github.com/berezovskyivalerii/tickersvc/internal/infra/logx"
+	adminauth "github.com/berezovskyivalerii/tickersvc/internal/infra/http/mw/adminauth"
 	"github.com/berezovskyivalerii/tickersvc/internal/infra/store"
 	usehealth "github.com/berezovskyivalerii/tickersvc/internal/usecase/health"
 	listsuc "github.com/berezovskyivalerii/tickersvc/internal/usecase/lists"
@@ -45,10 +45,11 @@ func Build() (*gin.Engine, error) {
 		return nil, err
 	}
 
-	// --- /health ---
+	// --- Health (/health) ---
 	var pingers []healthdom.Pinger
 	pingers = append(pingers, dbping.DBPing{DB: db})
-	uc := &usehealth.ReadinessInteractor{
+
+	ucHealth := &usehealth.ReadinessInteractor{
 		Pingers:   pingers,
 		Version:   config.Version,
 		Commit:    config.Commit,
@@ -59,57 +60,108 @@ func Build() (*gin.Engine, error) {
 	}
 
 	router := httpinfra.NewRouter()
-	health := httpctrl.NewHealthController(httpctrl.ReadinessRunner{UC: uc})
+	_ = router.SetTrustedProxies(nil)
+
+	health := httpctrl.NewHealthController(httpctrl.ReadinessRunner{UC: ucHealth})
 	health.Register(router)
 
-	// --- Repos / Use-cases ---
-	// markets
+	// --- Repos ---
 	marketsRepo := pgrepo.NewMarketsRepo(db)
+	defsRepo := pgrepo.NewListDefsRepo(db)
+	listsSaver := pgrepo.NewListsRepo(db)
+	listsReader := pgrepo.NewListsQueryRepo(db)
+	exchangesRepo := pgrepo.NewExchangesRepo(db)
+
+	// --- Active exchanges from DB + ENV-excludes ---
+	actMap, err := exchangesRepo.ActiveMap(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	exclude := map[string]bool{}
-	for _, s := range strings.Split(os.Getenv("EXCLUDE_EXCHANGES"), ",") {
-		s = strings.TrimSpace(strings.ToLower(s))
-		if s != "" { exclude[s] = true }
+	if v := os.Getenv("EXCLUDE_EXCHANGES"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(strings.ToLower(s))
+			if s != "" {
+				exclude[s] = true
+			}
+		}
 	}
-	
-	all := map[string]marketsdom.Fetcher{
-		"binance":   exbinance.New(),
-		"bybit":     exbybit.New(),
-		"okx":       exokx.New(),
-		"upbit":     exupbit.New(),
-		"coinbase":  excoin.New(),
-		"bithumb":   exbithumb.New(),
-		"robinhood": exrobin.New(),
+
+	// All fetchers
+	allFetchers := []marketsdom.Fetcher{
+		exbinance.New(),
+		exbybit.New(),
+		exokx.New(),
+		exupbit.New(),
+		excoin.New(),
+		exbithumb.New(),
+		exrobin.New(),
 	}
+
+	// Apply activities filters and exludes
 	var fetchers []marketsdom.Fetcher
-	for slug, f := range all {
-		if exclude[slug] { continue }
+	for _, f := range allFetchers {
+		if exclude[f.Name()] {
+			continue
+		}
+		if on, ok := actMap[f.ExchangeID()]; ok && !on {
+			continue
+		}
 		fetchers = append(fetchers, f)
 	}
-	
-	logger := logx.New()
-	slog.SetDefault(logger)
-	
-	// Orchestrator sync
+
 	marketsOrc := &marketsuc.Orchestrator{
 		Repo:     marketsRepo,
 		Fetchers: fetchers,
 		Timeout:  45 * time.Second,
-		Logger:   logger,
 	}
 
-	// lists: defs + saver + reader
-	defsRepo := pgrepo.NewListDefsRepo(db)
-	listsSaver := pgrepo.NewListsRepo(db)
-	listsReader := pgrepo.NewListsQueryRepo(db)
-
-	updater := &listsuc.Updater{
-		Defs:  defsRepo,
-		MRepo: marketsRepo,
-		Saver: listsSaver,
+	listsInteractor := &listsuc.Interactor{
+		Defs:    defsRepo,
+		Markets: marketsRepo,
+		Lists:   listsSaver,
 	}
 
-	// --- Admin: manual sync (diagnosis) ---
-	admin := router.Group("/admin")
+	// Public lists
+	pub := httpctrl.NewPublicListsController(listsReader)
+	pub.Register(router) // /api/lists/:slug и /api/lists?target=... [&as_text=1]
+
+	router.POST("/update", func(c *gin.Context) {
+		summary, err := marketsOrc.RunAll(c.Request.Context())
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		var srcPtr, tgtPtr *string
+		if q := strings.TrimSpace(c.Query("source")); q != "" {
+			s := strings.TrimSpace(strings.Split(q, ",")[0])
+			if s != "" {
+				srcPtr = &s
+			}
+		}
+		if q := strings.TrimSpace(c.Query("target")); q != "" {
+			t := strings.TrimSpace(strings.Split(q, ",")[0])
+			if t != "" {
+				tgtPtr = &t
+			}
+		}
+
+		updated, err := listsInteractor.BuildAndSaveFiltered(c.Request.Context(), srcPtr, tgtPtr)
+		if err != nil {
+			c.JSON(500, gin.H{
+				"error":        err.Error(),
+				"markets_sync": summary,
+			})
+			return
+		}
+		c.JSON(200, gin.H{
+			"markets_sync":  summary,
+			"lists_updated": updated,
+		})
+	})
+
+	admin := router.Group("/admin", adminauth.NewFromEnv().Handler())
 	admin.POST("/markets/sync", func(c *gin.Context) {
 		summary, err := marketsOrc.RunAll(c.Request.Context())
 		if err != nil {
@@ -118,41 +170,6 @@ func Build() (*gin.Engine, error) {
 		}
 		c.JSON(200, gin.H{"summary": summary})
 	})
-
-	// --- /update: sync -> lists rebuild ---
-	// ?source=okx&target=upbit  (both params optional)
-	router.POST("/update", func(c *gin.Context) {
-		// 1) всегда подтягиваем свежие рынки
-		summary, err := marketsOrc.RunAll(c.Request.Context())
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-
-		// 2) lists rebuild
-		var srcPtr, tgtPtr *string
-		if q := strings.TrimSpace(c.Query("source")); q != "" {
-			s := strings.Split(q, ",")[0]
-			srcPtr = &s
-		}
-		if q := strings.TrimSpace(c.Query("target")); q != "" {
-			t := strings.Split(q, ",")[0]
-			tgtPtr = &t
-		}
-
-		updated, err := updater.Update(c.Request.Context(), srcPtr, tgtPtr)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error(), "markets_sync": summary})
-			return
-		}
-		c.JSON(200, gin.H{
-			"markets_sync":  summary, // map[exchangeID][added,updated,archived]
-			"lists_updated": updated, // map[slug]inserted_count
-		})
-	})
-
-	listsCtrl := httpctrl.NewListsController(listsReader)
-	listsCtrl.Register(router)
 
 	return router, nil
 }

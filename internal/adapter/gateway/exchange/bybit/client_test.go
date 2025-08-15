@@ -60,7 +60,9 @@ func TestFetch_Spot_And_Futures(t *testing.T) {
 	ctx := context.Background()
 
 	spot, err := cli.FetchSpot(ctx)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(spot) != 2 || spot[0].Type != dm.TypeSpot {
 		t.Fatalf("spot parsed wrong: %+v", spot)
 	}
@@ -69,7 +71,9 @@ func TestFetch_Spot_And_Futures(t *testing.T) {
 	}
 
 	fut, err := cli.FetchFutures(ctx)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(fut) != 1 || fut[0].Type != dm.TypeFutures {
 		t.Fatalf("futures parsed wrong: %+v", fut)
 	}
