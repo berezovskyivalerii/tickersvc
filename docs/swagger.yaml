@@ -1,0 +1,141 @@
+definitions:
+  app.HealthResp:
+    properties:
+      buildTime:
+        type: string
+      checks:
+        additionalProperties:
+          type: string
+        type: object
+      commit:
+        type: string
+      now:
+        type: string
+      status:
+        type: string
+      uptime:
+        type: string
+      version:
+        type: string
+    type: object
+  app.ListGetJSON:
+    properties:
+      items:
+        items:
+          type: string
+        type: array
+      slug:
+        type: string
+    type: object
+  app.UpdateResp:
+    properties:
+      lists_updated:
+        additionalProperties:
+          type: integer
+        type: object
+      markets_sync:
+        additionalProperties:
+          items:
+            type: integer
+          type: array
+        type: object
+      segments_updated:
+        additionalProperties:
+          type: integer
+        type: object
+    type: object
+info:
+  contact: {}
+paths:
+  /api/lists/{slug}:
+    get:
+      parameters:
+      - description: list slug
+        example: binance_seg1
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: 1 → text/plain
+        in: query
+        name: as_text
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/app.ListGetJSON'
+      summary: Get list by slug
+      tags:
+      - public
+  /api/segments/{source}/{seg}:
+    get:
+      parameters:
+      - description: binance|bybit|okx
+        in: path
+        name: source
+        required: true
+        type: string
+      - description: 1|2|3|4
+        in: path
+        name: seg
+        required: true
+        type: integer
+      - description: 1 → text/plain
+        in: query
+        name: as_text
+        type: integer
+      responses:
+        "307":
+          description: Temporary Redirect
+          schema:
+            type: string
+      summary: Segment view (redirects to /api/lists/{source}_seg{n})
+      tags:
+      - public
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/app.HealthResp'
+      summary: Service readiness
+      tags:
+      - public
+  /update:
+    post:
+      parameters:
+      - description: segments|targets|all
+        in: query
+        name: mode
+        type: string
+      - description: binance,bybit,okx
+        in: query
+        name: source
+        type: string
+      - description: upbit|coinbase|bithumb
+        in: query
+        name: target
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/app.UpdateResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Sync markets and rebuild lists
+      tags:
+      - admin
+swagger: "2.0"

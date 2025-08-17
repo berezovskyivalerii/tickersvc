@@ -2,12 +2,17 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
+	docs "github.com/berezovskyivalerii/tickersvc/docs"
 	httpctrl "github.com/berezovskyivalerii/tickersvc/internal/adapter/controller/http"
 	"github.com/berezovskyivalerii/tickersvc/internal/adapter/gateway/dbping"
 	exbinance "github.com/berezovskyivalerii/tickersvc/internal/adapter/gateway/exchange/binance"
@@ -60,6 +65,27 @@ func Build() (*gin.Engine, error) {
 	}
 
 	router := httpinfra.NewRouter()
+	// Swagger метаданные (можно из ENV)
+	docs.SwaggerInfo.Title    = "TickerSvc API"
+	docs.SwaggerInfo.Version  = "1.0"
+	docs.SwaggerInfo.BasePath = "/"
+	docs.SwaggerInfo.Schemes  = []string{"http"}
+	// опционально: брать хост и схемы из .env
+	if h := strings.TrimSpace(os.Getenv("SWAGGER_HOST")); h != "" {
+		docs.SwaggerInfo.Host = h // например: localhost:8080
+	}
+	if s := strings.TrimSpace(os.Getenv("SWAGGER_SCHEMES")); s != "" {
+		// "http,https" -> []string{"http","https"}
+		parts := []string{}
+		for _, p := range strings.Split(s, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" { parts = append(parts, p) }
+		}
+		if len(parts) > 0 { docs.SwaggerInfo.Schemes = parts }
+	}
+
+	// Страница Swagger UI и doc.json
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	_ = router.SetTrustedProxies(nil)
 
 	health := httpctrl.NewHealthController(httpctrl.ReadinessRunner{UC: ucHealth})
@@ -98,7 +124,7 @@ func Build() (*gin.Engine, error) {
 		exrobin.New(),
 	}
 
-	// Apply activities filters and exludes
+	// Apply activities filters and excludes
 	var fetchers []marketsdom.Fetcher
 	for _, f := range allFetchers {
 		if exclude[f.Name()] {
@@ -126,11 +152,48 @@ func Build() (*gin.Engine, error) {
 	pub := httpctrl.NewPublicListsController(listsReader)
 	pub.Register(router) // /api/lists/:slug и /api/lists?target=... [&as_text=1]
 
+	// Сахарный роут: /api/segments/:source/:seg -> /api/lists/<source>_seg<seg>
+	router.GET("/api/segments/:source/:seg", func(c *gin.Context) {
+		source := strings.ToLower(strings.TrimSpace(c.Param("source")))
+		seg := strings.TrimSpace(c.Param("seg"))
+
+		switch source {
+		case "binance", "bybit", "okx":
+		default:
+			c.JSON(400, gin.H{"error": "source must be one of: binance, bybit, okx"})
+			return
+		}
+		switch seg {
+		case "1", "2", "3", "4":
+		default:
+			c.JSON(400, gin.H{"error": "seg must be 1,2,3, or 4"})
+			return
+		}
+
+		slug := fmt.Sprintf("%s_seg%s", source, seg)
+
+		q := c.Request.URL.Query()
+		q.Del("source")
+		q.Del("seg")
+
+		target := "/api/lists/" + url.PathEscape(slug)
+		if enc := q.Encode(); enc != "" {
+			target += "?" + enc
+		}
+
+		c.Redirect(307, target) // preserve метод/тело (если будут)
+	})
+
 	router.POST("/update", func(c *gin.Context) {
 		summary, err := marketsOrc.RunAll(c.Request.Context())
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
+		}
+
+		mode := strings.ToLower(strings.TrimSpace(c.Query("mode")))
+		if mode == "" {
+			mode = "all"
 		}
 
 		var srcPtr, tgtPtr *string
@@ -147,18 +210,39 @@ func Build() (*gin.Engine, error) {
 			}
 		}
 
-		updated, err := listsInteractor.BuildAndSaveFiltered(c.Request.Context(), srcPtr, tgtPtr)
-		if err != nil {
-			c.JSON(500, gin.H{
-				"error":        err.Error(),
-				"markets_sync": summary,
-			})
-			return
+		resp := gin.H{"markets_sync": summary}
+
+		// Сегменты (binance/bybit/okx)
+		if mode == "segments" || mode == "all" {
+			var segSources []string
+			if srcPtr != nil && *srcPtr != "" {
+				segSources = strings.Split(*srcPtr, ",") // можно "binance,okx"
+			}
+			segUpd, err := listsInteractor.RebuildSegments(c.Request.Context(), segSources...)
+			if err != nil {
+				c.JSON(500, gin.H{
+					"error":        err.Error(),
+					"markets_sync": summary,
+				})
+				return
+			}
+			resp["segments_updated"] = segUpd
 		}
-		c.JSON(200, gin.H{
-			"markets_sync":  summary,
-			"lists_updated": updated,
-		})
+
+		// Старые target-списки (okx_to_upbit и т.п.)
+		if mode == "targets" || mode == "all" {
+			updated, err := listsInteractor.BuildAndSaveFiltered(c.Request.Context(), srcPtr, tgtPtr)
+			if err != nil {
+				c.JSON(500, gin.H{
+					"error":        err.Error(),
+					"markets_sync": summary,
+				})
+				return
+			}
+			resp["lists_updated"] = updated
+		}
+
+		c.JSON(200, resp)
 	})
 
 	admin := router.Group("/admin", adminauth.NewFromEnv().Handler())

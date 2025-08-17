@@ -4,9 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 )
+
+type MarketRow struct {
+	ExchangeID int16
+	MType      string // 'spot' | 'futures'
+	Symbol     string
+	Base       string
+	Quote      string
+	IsActive   bool
+}
 
 type MarketsRepo struct {
 	db *sql.DB
@@ -165,6 +175,40 @@ func (r *MarketsRepo) LoadActiveByExchange(ctx context.Context, exchangeID int16
 		default: it.Type = markets.TypeSpot
 		}
 		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func (r *MarketsRepo) ListActiveByExchanges(ctx context.Context, exIDs ...int16) ([]MarketRow, error) {
+	if len(exIDs) == 0 {
+		return nil, nil
+	}
+	ph := make([]string, len(exIDs))
+	args := make([]any, len(exIDs))
+	for i, id := range exIDs {
+		ph[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	q := `
+		SELECT exchange_id, mtype, symbol, base_asset, quote_asset, is_active
+		FROM markets
+		WHERE is_active = TRUE
+		  AND exchange_id IN (` + strings.Join(ph, ",") + `)
+	`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []MarketRow
+	for rows.Next() {
+		var m MarketRow
+		if err := rows.Scan(&m.ExchangeID, &m.MType, &m.Symbol, &m.Base, &m.Quote, &m.IsActive); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }

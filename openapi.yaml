@@ -1,0 +1,103 @@
+openapi: 3.0.3
+info:
+  title: TickerSvc Public API
+  version: "1.0"
+servers:
+  - url: https://staging.tickersvc.yourdomain
+paths:
+  /health:
+    get:
+      summary: Service readiness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              example:
+                status: ok
+                version: dev
+                commit: dev
+                buildTime: unknown
+                uptime: "55m45s"
+                checks: { db: ok }
+                now: "2025-08-17T11:50:07Z"
+  /update:
+    post:
+      summary: Sync markets and rebuild lists
+      parameters:
+        - in: query
+          name: mode
+          schema: { type: string, enum: [segments, targets, all] }
+          description: What to rebuild
+        - in: query
+          name: source
+          schema: { type: string }
+          description: Filter sources (comma-separated), e.g. binance,okx
+        - in: query
+          name: target
+          schema: { type: string, enum: [upbit, coinbase, bithumb] }
+          description: Target filter (for legacy lists)
+      responses:
+        "200":
+          description: Rebuild summary
+          content:
+            application/json:
+              examples:
+                segments:
+                  value:
+                    markets_sync: { "1": [0,3758,0] }
+                    segments_updated:
+                      binance_seg1: 378
+                      binance_seg2: 61
+                      binance_seg3: 99
+                      binance_seg4: 2
+                targets:
+                  value:
+                    markets_sync: { "1": [0,3758,0] }
+                    lists_updated:
+                      binance_to_upbit: 508
+                      binance_to_coinbase: 463
+                      binance_to_bithumb: 408
+  /api/lists/{slug}:
+    get:
+      summary: Get list by slug
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema: { type: string }
+          example: binance_seg1
+        - in: query
+          name: as_text
+          schema: { type: integer, enum: [0,1] }
+          description: When 1, returns "SPOT, FUTURES" lines as text/plain
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              example:
+                slug: bybit_seg3
+                items: ["BTCUSDT, BTC-26DEC25", "ETHUSDT, ETH-26DEC25"]
+            text/plain:
+              example: |
+                EPICUSDT, EPICUSDT
+                AAVEDOWNUSDT, none
+  /api/segments/{source}/{seg}:
+    get:
+      summary: Convenience redirect to lists by segment
+      parameters:
+        - in: path
+          name: source
+          required: true
+          schema: { type: string, enum: [binance, bybit, okx] }
+        - in: path
+          name: seg
+          required: true
+          schema: { type: string, enum: ["1","2","3","4"] }
+        - in: query
+          name: as_text
+          schema: { type: integer, enum: [0,1] }
+      responses:
+        "307":
+          description: Redirect to /api/lists/{source}_seg{seg}

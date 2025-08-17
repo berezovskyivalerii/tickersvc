@@ -5,8 +5,17 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
+
 	listsdom "github.com/berezovskyivalerii/tickersvc/internal/domain/lists"
 )
+
+type ListDef struct {
+	ID      int16
+	Slug    string
+	Kind    string // target|segment
+	Segment string // seg1..seg4 or empty
+}
 
 type ListDefsRepo struct{ db *sql.DB }
 
@@ -37,7 +46,9 @@ func (r *ListDefsRepo) Find(ctx context.Context, sourceSlug, targetSlug *string)
 	q += " ORDER BY ld.id"
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
-	if err != nil { return nil, fmt.Errorf("list_defs find: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("list_defs find: %w", err)
+	}
 	defer rows.Close()
 
 	var out []listsdom.Def
@@ -50,7 +61,6 @@ func (r *ListDefsRepo) Find(ctx context.Context, sourceSlug, targetSlug *string)
 	}
 	return out, rows.Err()
 }
-
 
 func (r *ListDefsRepo) GetByID(ctx context.Context, id int16) (listsdom.Def, error) {
 	const q = `
@@ -66,3 +76,58 @@ func (r *ListDefsRepo) GetByID(ctx context.Context, id int16) (listsdom.Def, err
 	}
 	return d, nil
 }
+
+func (r *ListDefsRepo) LoadIDsBySlugs(ctx context.Context, slugs []string) (map[string]int16, error) {
+	out := make(map[string]int16, len(slugs))
+	if len(slugs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, slug
+		FROM list_defs
+		WHERE slug = ANY($1)
+	`, pqArray(slugs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int16
+		var slug string
+		if err := rows.Scan(&id, &slug); err != nil {
+			return nil, err
+		}
+		out[slug] = id
+	}
+	return out, rows.Err()
+}
+
+func (r *ListDefsRepo) IDsBySlugs(ctx context.Context, slugs []string) (map[string]int16, error) {
+    out := make(map[string]int16, len(slugs))
+    if len(slugs) == 0 {
+        return out, nil
+    }
+    rows, err := r.db.QueryContext(ctx, `
+        SELECT id, slug
+        FROM list_defs
+        WHERE slug = ANY($1)
+    `, pq.Array(slugs))
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var id int16
+        var slug string
+        if err := rows.Scan(&id, &slug); err != nil {
+            return nil, err
+        }
+        out[slug] = id
+    }
+    return out, rows.Err()
+}
+
+// small helper to pass string slice as Postgres array
+func pqArray[T any](v []T) interface{} { return pq.Array(v) }

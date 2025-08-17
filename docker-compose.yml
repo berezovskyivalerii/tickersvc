@@ -36,6 +36,8 @@ services:
       HTTP_BACKOFF_MIN: ${HTTP_BACKOFF_MIN}
       HTTP_BACKOFF_MAX: ${HTTP_BACKOFF_MAX}
       HTTP_USER_AGENT: ${HTTP_USER_AGENT}
+      SWAGGER_HOST: ${SWAGGER_HOST}
+      SWAGGER_SCHEMES: ${SWAGGER_SCHEMES}
     depends_on:
       db:
         condition: service_healthy
