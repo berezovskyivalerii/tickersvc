@@ -26,93 +26,75 @@ type Segments struct {
 }
 
 func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
-	var S map[string]SourceInf
-	switch source {
-	case "binance":
-		S = sets.Binance
-	case "bybit":
-		S = sets.Bybit
-	case "okx":
-		S = sets.OKX
-	default:
-		return Segments{}, fmt.Errorf("unknown source %q", source)
-	}
+    var S map[string]SourceInf
+    switch source {
+    case "binance":
+        S = sets.Binance
+    case "bybit":
+        S = sets.Bybit
+    case "okx":
+        S = sets.OKX
+    default:
+        return Segments{}, fmt.Errorf("unknown source %q", source)
+    }
 
-	inU, inH, inC := sets.Upbit, sets.Bithumb, sets.Coinbase
-	in := func(m map[string]struct{}, k string) bool { _, ok := m[k]; return ok }
+    inU, inH, inC := sets.Upbit, sets.Bithumb, sets.Coinbase
+    in := func(m map[string]struct{}, k string) bool { _, ok := m[k]; return ok }
 
-	seg0 := map[string]struct{}{} 
-	seg3, seg4, seg2, seg1 := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+    seg0 := map[string]struct{}{} // ◯ S \ (U ∪ H ∪ C) — только binance
+    seg1 := map[string]struct{}{} // 🟢 S ∩ ((C ∪ H) \ U)
+    seg2 := map[string]struct{}{} // 🟠 S ∩ ( ((U∩H)\C) ∪ ((U∩C)\H) )
+    seg3 := map[string]struct{}{} // 🔴 S ∩ U ∩ C ∩ H
+    seg4 := map[string]struct{}{} // 🔵 S ∩ (U \ (C ∪ H))
 
-	// ◯ S \ (U ∪ H ∪ C) — только binance
-    if source == "binance" {
-        for base := range S {
-            if !in(inU, base) && !in(inH, base) && !in(inC, base) {
-                seg0[base] = struct{}{}
-            }
+    for base := range S {
+        u, h, c := in(inU, base), in(inH, base), in(inC, base)
+
+        if source == "binance" && !u && !h && !c {
+            seg0[base] = struct{}{}
+        }
+        if u && c && h {
+            seg3[base] = struct{}{}
+            continue
+        }
+        if u && !c && !h {
+            seg4[base] = struct{}{}
+            continue
+        }
+        // 🟢: присутствует на C или H, но отсутствует на Up
+        if (c || h) && !u {
+            seg1[base] = struct{}{}
+            continue
+        }
+        // 🟠: на Up вместе ровно с одной из бирж (вторая отсутствует)
+        if u && ((h && !c) || (c && !h)) {
+            seg2[base] = struct{}{}
+            continue
         }
     }
 
-	// 🔴 S ∩ U ∩ C ∩ H
-	for base := range S {
-		if in(inU, base) && in(inC, base) && in(inH, base) {
-			seg3[base] = struct{}{}
-		}
-	}
-	// 🔵 S ∩ (U \ (C ∪ H))
-	for base := range S {
-		if in(inU, base) && !in(inC, base) && !in(inH, base) {
-			if _, taken := seg3[base]; !taken {
-				seg4[base] = struct{}{}
-			}
-		}
-	}
-	// 🟠 S ∩ ((U∩C) ∪ (C∩H)) \ (seg3 ∪ seg4)
-	for base := range S {
-		uc := in(inU, base) && in(inC, base)
-		ch := in(inC, base) && in(inH, base)
-		if uc || ch {
-			if _, red := seg3[base]; red {
-				continue
-			}
-			if _, blue := seg4[base]; blue {
-				continue
-			}
-			seg2[base] = struct{}{}
-		}
-	}
-	// 🟢 S \ U  (и не дублируем то, что уже пошло в 🟠)
-	for base := range S {
-		if !in(inU, base) {
-			if _, orange := seg2[base]; orange {
-				continue
-			}
-			seg1[base] = struct{}{}
-		}
-	}
+    toRows := func(bases map[string]struct{}) []listsdom.Row {
+        out := make([]listsdom.Row, 0, len(bases))
+        for base := range bases {
+            si := S[base]
+            var fut *string
+            if si.FuturesSymbol != "" {
+                f := si.FuturesSymbol
+                fut = &f
+            }
+            out = append(out, listsdom.Row{Spot: si.SpotSymbol, Futures: fut})
+        }
+        sort.Slice(out, func(i, j int) bool { return out[i].Spot < out[j].Spot })
+        return out
+    }
 
-	toRows := func(bases map[string]struct{}) []listsdom.Row {
-		out := make([]listsdom.Row, 0, len(bases))
-		for base := range bases {
-			si := S[base]
-			var fut *string
-			if si.FuturesSymbol != "" {
-				f := si.FuturesSymbol
-				fut = &f
-			}
-			out = append(out, listsdom.Row{Spot: si.SpotSymbol, Futures: fut})
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Spot < out[j].Spot })
-		return out
-	}
-
-	return Segments{
-		Seg0: toRows(seg0),
-		Seg1: toRows(seg1),
-		Seg2: toRows(seg2),
-		Seg3: toRows(seg3),
-		Seg4: toRows(seg4),
-	}, nil
+    return Segments{
+        Seg0: toRows(seg0),
+        Seg1: toRows(seg1),
+        Seg2: toRows(seg2),
+        Seg3: toRows(seg3),
+        Seg4: toRows(seg4),
+    }, nil
 }
 
 func BuildAllSegments(sets Sets) map[string][]listsdom.Row {
