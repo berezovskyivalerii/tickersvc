@@ -10,6 +10,7 @@ import (
 type SegmentKind string
 
 const (
+	Seg0 SegmentKind = "seg0" // ◯ S \ (U ∪ H ∪ C) — используем только для binance
 	Seg1 SegmentKind = "seg1" // 🟢 S \ U
 	Seg2 SegmentKind = "seg2" // 🟠 S ∩ ((U∩C) ∪ (C∩H))
 	Seg3 SegmentKind = "seg3" // 🔴 S ∩ U ∩ C ∩ H
@@ -17,6 +18,7 @@ const (
 )
 
 type Segments struct {
+	Seg0 []listsdom.Row
 	Seg1 []listsdom.Row
 	Seg2 []listsdom.Row
 	Seg3 []listsdom.Row
@@ -39,7 +41,17 @@ func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
 	inU, inH, inC := sets.Upbit, sets.Bithumb, sets.Coinbase
 	in := func(m map[string]struct{}, k string) bool { _, ok := m[k]; return ok }
 
+	seg0 := map[string]struct{}{} 
 	seg3, seg4, seg2, seg1 := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+
+	// ◯ S \ (U ∪ H ∪ C) — только binance
+    if source == "binance" {
+        for base := range S {
+            if !in(inU, base) && !in(inH, base) && !in(inC, base) {
+                seg0[base] = struct{}{}
+            }
+        }
+    }
 
 	// 🔴 S ∩ U ∩ C ∩ H
 	for base := range S {
@@ -95,6 +107,7 @@ func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
 	}
 
 	return Segments{
+		Seg0: toRows(seg0),
 		Seg1: toRows(seg1),
 		Seg2: toRows(seg2),
 		Seg3: toRows(seg3),
@@ -106,6 +119,7 @@ func BuildAllSegments(sets Sets) map[string][]listsdom.Row {
 	out := make(map[string][]listsdom.Row, 12)
 
 	if segs, err := BuildSegmentsForSource(sets, "binance"); err == nil {
+		out["binance_seg0"] = segs.Seg0
 		out["binance_seg1"] = segs.Seg1
 		out["binance_seg2"] = segs.Seg2
 		out["binance_seg3"] = segs.Seg3
