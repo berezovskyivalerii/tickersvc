@@ -164,9 +164,9 @@ func Build() (*gin.Engine, error) {
 			return
 		}
 		switch seg {
-		case "1", "2", "3", "4":
+		case "0", "1", "2", "3", "4":
 		default:
-			c.JSON(400, gin.H{"error": "seg must be 1,2,3, or 4"})
+			c.JSON(400, gin.H{"error": "seg must be 0, 1,2,3, or 4"})
 			return
 		}
 
