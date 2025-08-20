@@ -26,4 +26,6 @@ type QueryRepo interface {
 	GetTextByTarget(ctx context.Context, targetSlug string) (map[string][]string, error)
 	// For /lists - return nested structure target -> source -> lines
 	GetAllText(ctx context.Context) (map[string]map[string][]string, error)
+	
+	GetRowsBySlug(ctx context.Context, slug string) ([]Row, error)
 }

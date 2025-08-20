@@ -148,3 +148,8 @@ func (r *ListsRepo) ReplaceItems(ctx context.Context, listID int16, rows []lists
 	return len(uniq), nil
 }
 
+func (r *ListsRepo) GetRowsBySlug(ctx context.Context, slug string) ([]listsdom.Row, error) {
+	return nil, nil
+}
+
+

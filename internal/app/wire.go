@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -65,6 +63,8 @@ func Build() (*gin.Engine, error) {
 	}
 
 	router := httpinfra.NewRouter()
+	router.Use(adminauth.NewFromEnv().Handler())
+
 	// Swagger метаданные (можно из ENV)
 	docs.SwaggerInfo.Title    = "TickerSvc API"
 	docs.SwaggerInfo.Version  = "1.0"
@@ -151,38 +151,6 @@ func Build() (*gin.Engine, error) {
 	// Public lists
 	pub := httpctrl.NewPublicListsController(listsReader)
 	pub.Register(router) // /api/lists/:slug и /api/lists?target=... [&as_text=1]
-
-	// Сахарный роут: /api/segments/:source/:seg -> /api/lists/<source>_seg<seg>
-	router.GET("/api/segments/:source/:seg", func(c *gin.Context) {
-		source := strings.ToLower(strings.TrimSpace(c.Param("source")))
-		seg := strings.TrimSpace(c.Param("seg"))
-
-		switch source {
-		case "binance", "bybit", "okx":
-		default:
-			c.JSON(400, gin.H{"error": "source must be one of: binance, bybit, okx"})
-			return
-		}
-		switch seg {
-		case "0", "1", "2", "3", "4":
-		default:
-			c.JSON(400, gin.H{"error": "seg must be 0, 1,2,3, or 4"})
-			return
-		}
-
-		slug := fmt.Sprintf("%s_seg%s", source, seg)
-
-		q := c.Request.URL.Query()
-		q.Del("source")
-		q.Del("seg")
-
-		target := "/api/lists/" + url.PathEscape(slug)
-		if enc := q.Encode(); enc != "" {
-			target += "?" + enc
-		}
-
-		c.Redirect(307, target) // preserve метод/тело (если будут)
-	})
 
 	router.POST("/update", func(c *gin.Context) {
 		summary, err := marketsOrc.RunAll(c.Request.Context())

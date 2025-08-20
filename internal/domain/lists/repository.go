@@ -14,4 +14,6 @@ type Repo interface {
 	ReplaceByListID(ctx context.Context, listID int16, items []Item) (inserted int, err error)
 	// The same, but by slug (we'll find the id, lock the list_defs FOR UPDATE line).
 	ReplaceBySlug(ctx context.Context, slug string, items []Item) (inserted int, err error)
+
+	GetRowsBySlug(ctx context.Context, slug string) ([]Row, error)
 }

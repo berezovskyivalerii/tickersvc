@@ -10,6 +10,15 @@ import (
 	ldom "github.com/berezovskyivalerii/tickersvc/internal/domain/lists"
 )
 
+type itemDTO struct {
+	SpotSymbol   string `json:"SpotSymbol"`
+	FutureSymbol string `json:"FutureSymbol"`
+}
+
+type itemsResp struct {
+	Items []itemDTO `json:"items"`
+}
+
 type PublicListsController struct {
 	Q ldom.QueryRepo
 }
@@ -18,10 +27,11 @@ func NewPublicListsController(q ldom.QueryRepo) *PublicListsController {
 	return &PublicListsController{Q: q}
 }
 
-func (c *PublicListsController) Register(r *gin.Engine) {
+func (ctl *PublicListsController) Register(r *gin.Engine) {
 	api := r.Group("/api")
-	api.GET("/lists/:slug", c.bySlug) // GET /api/lists/okx_to_upbit[?as_text=1]
-	api.GET("/lists", c.byTarget)     // GET /api/lists?target=upbit[&as_text=1]
+	api.GET("/lists/:slug", ctl.bySlug)                   // JSON или text (as_text=1)
+	api.GET("/lists", ctl.byTarget)                       // уже умел text
+	api.GET("/segments/:source/:seg", ctl.segmentForward) // без редиректа
 }
 
 func wantText(ctx *gin.Context) bool {
@@ -29,34 +39,37 @@ func wantText(ctx *gin.Context) bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
-func (c *PublicListsController) bySlug(ctx *gin.Context) {
-	slug := ctx.Param("slug")
-	lines, err := c.Q.GetTextBySlug(ctx, slug)
+func (ctl *PublicListsController) bySlug(c *gin.Context) {
+	slug := c.Param("slug")
+	rows, err := ctl.Q.GetRowsBySlug(c, slug)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if wantText(ctx) {
-		ctx.Header("Content-Type", "text/plain; charset=utf-8")
-		for i, s := range lines {
-			if i > 0 {
-				_, _ = ctx.Writer.WriteString("\n")
-			}
-			_, _ = ctx.Writer.WriteString(s)
+
+	if wantText(c) {
+		writeTextRows(c, rows)
+		return
+	}
+
+	items := make([]itemDTO, 0, len(rows))
+	for _, r := range rows {
+		fs := "none"
+		if r.Futures != nil && *r.Futures != "" {
+			fs = *r.Futures
 		}
-		_, _ = ctx.Writer.WriteString("\n")
-		return
+		items = append(items, itemDTO{SpotSymbol: r.Spot, FutureSymbol: fs})
 	}
-	ctx.JSON(http.StatusOK, gin.H{"slug": slug, "items": lines})
+	c.JSON(http.StatusOK, itemsResp{Items: items})
 }
 
-func (c *PublicListsController) byTarget(ctx *gin.Context) {
+func (ctl *PublicListsController) byTarget(ctx *gin.Context) {
 	target := strings.TrimSpace(ctx.Query("target"))
 	if target == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "missing target"})
 		return
 	}
-	data, err := c.Q.GetTextByTarget(ctx, target) // map[source][]lines
+	data, err := ctl.Q.GetTextByTarget(ctx, target) // map[source][]lines
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -85,4 +98,48 @@ func (c *PublicListsController) byTarget(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"target": target, "sources": data})
+}
+
+// внутренний форвард без 307
+func (ctl *PublicListsController) segmentForward(c *gin.Context) {
+	source := strings.ToLower(strings.TrimSpace(c.Param("source")))
+	seg := strings.TrimSpace(c.Param("seg"))
+
+	switch source {
+	case "binance", "bybit", "okx":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "source must be one of: binance, bybit, okx"})
+		return
+	}
+	switch seg {
+	case "0", "1", "2", "3", "4":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "seg must be 0, 1, 2, 3, or 4"})
+		return
+	}
+
+	// подложим slug и переиспользуем bySlug (сохранит ?as_text=1)
+	slug := source + "_seg" + seg
+	c.Params = append(c.Params, gin.Param{Key: "slug", Value: slug})
+	ctl.bySlug(c)
+}
+
+func writeTextRows(c *gin.Context, rows []ldom.Row) {
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		fs := "none"
+		if r.Futures != nil && *r.Futures != "" {
+			fs = *r.Futures
+		}
+		lines = append(lines, r.Spot+", "+fs)
+	}
+	sort.Strings(lines)
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	for i, line := range lines {
+		if i > 0 {
+			_, _ = c.Writer.WriteString("\n")
+		}
+		_, _ = c.Writer.WriteString(line)
+	}
+	_, _ = c.Writer.WriteString("\n")
 }
