@@ -26,6 +26,7 @@ import (
 	marketsdom "github.com/berezovskyivalerii/tickersvc/internal/domain/markets"
 	httpinfra "github.com/berezovskyivalerii/tickersvc/internal/infra/http"
 	adminauth "github.com/berezovskyivalerii/tickersvc/internal/infra/http/mw/adminauth"
+	"github.com/berezovskyivalerii/tickersvc/internal/infra/scheduler"
 	"github.com/berezovskyivalerii/tickersvc/internal/infra/store"
 	usehealth "github.com/berezovskyivalerii/tickersvc/internal/usecase/health"
 	listsuc "github.com/berezovskyivalerii/tickersvc/internal/usecase/lists"
@@ -63,28 +64,30 @@ func Build() (*gin.Engine, error) {
 	}
 
 	router := httpinfra.NewRouter()
+
+	// Все ручки защищены ADMIN_API_KEY
 	router.Use(adminauth.NewFromEnv().Handler())
 
-	// Swagger метаданные (можно из ENV)
-	docs.SwaggerInfo.Title    = "TickerSvc API"
-	docs.SwaggerInfo.Version  = "1.0"
+	// Swagger (тоже под ключ)
+	docs.SwaggerInfo.Title = "TickerSvc API"
+	docs.SwaggerInfo.Version = "1.0"
 	docs.SwaggerInfo.BasePath = "/"
-	docs.SwaggerInfo.Schemes  = []string{"http"}
-	// опционально: брать хост и схемы из .env
+	docs.SwaggerInfo.Schemes = []string{"http"}
 	if h := strings.TrimSpace(os.Getenv("SWAGGER_HOST")); h != "" {
-		docs.SwaggerInfo.Host = h // например: localhost:8080
+		docs.SwaggerInfo.Host = h
 	}
 	if s := strings.TrimSpace(os.Getenv("SWAGGER_SCHEMES")); s != "" {
-		// "http,https" -> []string{"http","https"}
-		parts := []string{}
+		var parts []string
 		for _, p := range strings.Split(s, ",") {
 			p = strings.TrimSpace(p)
-			if p != "" { parts = append(parts, p) }
+			if p != "" {
+				parts = append(parts, p)
+			}
 		}
-		if len(parts) > 0 { docs.SwaggerInfo.Schemes = parts }
+		if len(parts) > 0 {
+			docs.SwaggerInfo.Schemes = parts
+		}
 	}
-
-	// Страница Swagger UI и doc.json
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	_ = router.SetTrustedProxies(nil)
 
@@ -98,7 +101,7 @@ func Build() (*gin.Engine, error) {
 	listsReader := pgrepo.NewListsQueryRepo(db)
 	exchangesRepo := pgrepo.NewExchangesRepo(db)
 
-	// --- Active exchanges from DB + ENV-excludes ---
+	// --- Active exchanges + excludes from ENV ---
 	actMap, err := exchangesRepo.ActiveMap(context.Background())
 	if err != nil {
 		return nil, err
@@ -113,7 +116,7 @@ func Build() (*gin.Engine, error) {
 		}
 	}
 
-	// All fetchers
+	// Fetchers (по активным биржам)
 	allFetchers := []marketsdom.Fetcher{
 		exbinance.New(),
 		exbybit.New(),
@@ -123,8 +126,6 @@ func Build() (*gin.Engine, error) {
 		exbithumb.New(),
 		exrobin.New(),
 	}
-
-	// Apply activities filters and excludes
 	var fetchers []marketsdom.Fetcher
 	for _, f := range allFetchers {
 		if exclude[f.Name()] {
@@ -136,22 +137,40 @@ func Build() (*gin.Engine, error) {
 		fetchers = append(fetchers, f)
 	}
 
+	// Use-cases
 	marketsOrc := &marketsuc.Orchestrator{
 		Repo:     marketsRepo,
 		Fetchers: fetchers,
 		Timeout:  45 * time.Second,
 	}
-
 	listsInteractor := &listsuc.Interactor{
 		Defs:    defsRepo,
 		Markets: marketsRepo,
 		Lists:   listsSaver,
 	}
 
-	// Public lists
-	pub := httpctrl.NewPublicListsController(listsReader)
-	pub.Register(router) // /api/lists/:slug и /api/lists?target=... [&as_text=1]
+	// Авто-обновление каждые N минут (по умолчанию 10m)
+	if os.Getenv("AUTO_UPDATE_DISABLE") != "1" {
+		interval := 10 * time.Minute
+		if s := os.Getenv("AUTO_UPDATE_INTERVAL"); s != "" {
+			if d, err := time.ParseDuration(s); err == nil && d > 0 {
+				interval = d
+			}
+		}
+		au := &scheduler.AutoUpdater{
+			Markets:  marketsOrc,
+			Lists:    listsInteractor, // внутри вызывает BuildAndSaveFiltered(nil,nil)
+			Interval: interval,
+			Timeout:  4 * time.Minute,
+		}
+		au.Start(context.Background())
+	}
 
+	// Публичные (под ключом) списки и сегменты
+	pub := httpctrl.NewPublicListsController(listsReader)
+	pub.Register(router) // /api/lists/:slug, /api/lists?target=..., /api/segments/:source/:seg
+
+	// POST /update — sync + пересборка списков/сегментов
 	router.POST("/update", func(c *gin.Context) {
 		summary, err := marketsOrc.RunAll(c.Request.Context())
 		if err != nil {
@@ -164,17 +183,22 @@ func Build() (*gin.Engine, error) {
 			mode = "all"
 		}
 
+		// raw для сегментов (поддержка нескольких источников)
+		srcRaw := strings.TrimSpace(c.Query("source"))
+		tgtRaw := strings.TrimSpace(c.Query("target"))
+
+		// targets: берём первый source/target
 		var srcPtr, tgtPtr *string
-		if q := strings.TrimSpace(c.Query("source")); q != "" {
-			s := strings.TrimSpace(strings.Split(q, ",")[0])
-			if s != "" {
-				srcPtr = &s
+		if srcRaw != "" {
+			first := strings.TrimSpace(strings.Split(srcRaw, ",")[0])
+			if first != "" {
+				srcPtr = &first
 			}
 		}
-		if q := strings.TrimSpace(c.Query("target")); q != "" {
-			t := strings.TrimSpace(strings.Split(q, ",")[0])
-			if t != "" {
-				tgtPtr = &t
+		if tgtRaw != "" {
+			first := strings.TrimSpace(strings.Split(tgtRaw, ",")[0])
+			if first != "" {
+				tgtPtr = &first
 			}
 		}
 
@@ -183,8 +207,13 @@ func Build() (*gin.Engine, error) {
 		// Сегменты (binance/bybit/okx)
 		if mode == "segments" || mode == "all" {
 			var segSources []string
-			if srcPtr != nil && *srcPtr != "" {
-				segSources = strings.Split(*srcPtr, ",") // можно "binance,okx"
+			if srcRaw != "" {
+				for _, v := range strings.Split(srcRaw, ",") {
+					v = strings.TrimSpace(v)
+					if v != "" {
+						segSources = append(segSources, v)
+					}
+				}
 			}
 			segUpd, err := listsInteractor.RebuildSegments(c.Request.Context(), segSources...)
 			if err != nil {
@@ -197,7 +226,7 @@ func Build() (*gin.Engine, error) {
 			resp["segments_updated"] = segUpd
 		}
 
-		// Старые target-списки (okx_to_upbit и т.п.)
+		// Target-списки (okx_to_upbit и т.п.)
 		if mode == "targets" || mode == "all" {
 			updated, err := listsInteractor.BuildAndSaveFiltered(c.Request.Context(), srcPtr, tgtPtr)
 			if err != nil {
@@ -213,7 +242,8 @@ func Build() (*gin.Engine, error) {
 		c.JSON(200, resp)
 	})
 
-	admin := router.Group("/admin", adminauth.NewFromEnv().Handler())
+	// /admin — только админ-ручки (middleware уже висит глобально)
+	admin := router.Group("/admin")
 	admin.POST("/markets/sync", func(c *gin.Context) {
 		summary, err := marketsOrc.RunAll(c.Request.Context())
 		if err != nil {
