@@ -13,7 +13,7 @@ import (
 // - ignoreBTCOnly: true for Upbit/Bithumb (BTC-only on target is NOT considered presence)
 func BuildListRows(source []dm.Item, target []dm.Item, mode string) []Row {
 	srcIdx := buildSourceIndex(source)
-	tgtPr  := buildPresence(target)
+	tgtPr := buildPresence(target)
 
 	rows := make([]Row, 0, len(srcIdx))
 	for base, si := range srcIdx {
@@ -22,27 +22,28 @@ func BuildListRows(source []dm.Item, target []dm.Item, mode string) []Row {
 
 		switch mode {
 		case "upbit", "bithumb":
-			// we exclude only if there is a NON-BTC spot on the target
+			// считаем присутствием только пары НЕ BTC и НЕ USDT
 			exclude = pr.HasNonBTC
 		case "coinbase":
-			// we exclude at any spot presence
 			exclude = pr.HasAnySpot
 		case "binance":
-			// we exclude only if there is spot and no futures on Binance
 			exclude = pr.HasAnySpot && !pr.HasFutures
 		default:
 			exclude = pr.HasAnySpot
 		}
-		if exclude { continue }
+		if exclude {
+			continue
+		}
 
 		f := "none"
-		if si.FuturesSymbol != "" { f = si.FuturesSymbol }
+		if si.FuturesSymbol != "" {
+			f = si.FuturesSymbol
+		}
 		rows = append(rows, Row{Spot: si.SpotSymbol, Futures: f})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Spot < rows[j].Spot })
 	return rows
 }
-
 
 // FormatAsText — "SPOT, FUTURES" line by line.
 func FormatAsText(rows []Row) string {
@@ -66,6 +67,7 @@ func FormatAsText(rows []Row) string {
 type presence struct {
 	HasAnySpot bool
 	HasBTC     bool
+	HasUSDT    bool
 	HasNonBTC  bool
 	HasFutures bool
 }
@@ -78,8 +80,14 @@ func buildPresence(items []dm.Item) map[string]presence {
 		switch it.Type {
 		case dm.TypeSpot:
 			pr.HasAnySpot = true
-			q := strings.ToUpper(it.Quote)
-			if q == "BTC" { pr.HasBTC = true } else { pr.HasNonBTC = true }
+			switch strings.ToUpper(it.Quote) {
+			case "BTC":
+				pr.HasBTC = true
+			case "USDT":
+				pr.HasUSDT = true
+			default:
+				pr.HasNonBTC = true
+			}
 		case dm.TypeFutures:
 			pr.HasFutures = true
 		}

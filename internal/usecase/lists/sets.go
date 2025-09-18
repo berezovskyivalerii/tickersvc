@@ -127,23 +127,42 @@ func BuildSets(ctx context.Context, mr dm.Repo, quotes config.QuotesConfig) (Set
 	}
 
 	// --- цели ---
-	handleTarget := func(items []dm.Item, dst map[string]struct{}) {
+	// --- цели ---
+
+	// базовая проверка «разрешённой котировки» из конфигурации
+	isAllowed := func(q string) bool {
+		_, ok := quotes.TargetAllowedQuotes[q]
+		return ok
+	}
+
+	// общий конструктор множества присутствия с произвольным фильтром по котировке
+	handleTarget := func(items []dm.Item, dst map[string]struct{}, allow func(q string) bool) {
 		for _, it := range items {
 			if it.Type != dm.TypeSpot {
 				continue
 			}
-			base := strings.ToUpper(it.Base)
-			quote := strings.ToUpper(it.Quote)
-			if _, ok := quotes.TargetAllowedQuotes[quote]; !ok {
+			q := strings.ToUpper(it.Quote)
+			if !allow(q) {
 				continue
 			}
+			base := strings.ToUpper(it.Base)
 			dst[base] = struct{}{}
 		}
 	}
 
-	handleTarget(upb, out.Upbit)
-	handleTarget(bth, out.Bithumb)
-	handleTarget(cnb, out.Coinbase)
+	// Upbit/Bithumb: игнорим USDT (и BTC), даже если они есть в TargetAllowedQuotes
+	allowUpOrBithumb := func(q string) bool {
+		if !isAllowed(q) { return false }
+		return q != "USDT" && q != "BTC"
+	}
+
+	// Coinbase — как раньше: любая разрешённая котировка
+	allowCoinbase := func(q string) bool { return isAllowed(q) }
+
+	handleTarget(upb, out.Upbit,    allowUpOrBithumb)
+	handleTarget(bth, out.Bithumb,  allowUpOrBithumb)
+	handleTarget(cnb, out.Coinbase, allowCoinbase)
+
 
 	return out, nil
 }
