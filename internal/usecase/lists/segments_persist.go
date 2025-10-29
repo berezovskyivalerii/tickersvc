@@ -10,8 +10,6 @@ import (
 	"github.com/berezovskyivalerii/tickersvc/internal/config"
 )
 
-// RebuildSegments: строит seg1..seg4 для binance/bybit/okx и сохраняет их в БД.
-// sources: nil/empty → все; можно передать ["binance","okx"].
 func (uc *Interactor) RebuildSegments(ctx context.Context, sources ...string) (map[string]int, error) {
 	// 1) множества
 	quotes := config.LoadQuotes()

@@ -3,6 +3,7 @@ package lists
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	listsdom "github.com/berezovskyivalerii/tickersvc/internal/domain/lists"
 )
@@ -38,8 +39,9 @@ func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
         return Segments{}, fmt.Errorf("unknown source %q", source)
     }
 
-    inU, inH, inC := sets.Upbit, sets.Bithumb, sets.Coinbase
-    in := func(m map[string]struct{}, k string) bool { _, ok := m[k]; return ok }
+    // presence-множества уже подготовлены с нужной фильтрацией в BuildSets
+    up, hi, ci := sets.Upbit, sets.Bithumb, sets.Coinbase
+    in := func(m map[string]struct{}, k string) bool { _, ok := m[strings.ToUpper(k)]; return ok }
 
     seg0 := map[string]struct{}{} // ◯ S \ (U ∪ H ∪ C) — только binance
     seg1 := map[string]struct{}{} // 🟢 S ∩ ((C ∪ H) \ U)
@@ -48,10 +50,11 @@ func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
     seg4 := map[string]struct{}{} // 🔵 S ∩ (U \ (C ∪ H))
 
     for base := range S {
-        u, h, c := in(inU, base), in(inH, base), in(inC, base)
+        u, h, c := in(up, base), in(hi, base), in(ci, base)
 
         if source == "binance" && !u && !h && !c {
             seg0[base] = struct{}{}
+            continue
         }
         if u && c && h {
             seg3[base] = struct{}{}
@@ -61,12 +64,10 @@ func BuildSegmentsForSource(sets Sets, source string) (Segments, error) {
             seg4[base] = struct{}{}
             continue
         }
-        // 🟢: присутствует на C или H, но отсутствует на Up
         if (c || h) && !u {
             seg1[base] = struct{}{}
             continue
         }
-        // 🟠: на Up вместе ровно с одной из бирж (вторая отсутствует)
         if u && ((h && !c) || (c && !h)) {
             seg2[base] = struct{}{}
             continue
