@@ -26,7 +26,7 @@ services:
     environment:
       PORT: ${PORT}
       GIN_MODE: ${GIN_MODE}
-      DB_DSN: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
+      DB_DSN: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tickersvc-db-1:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       ADMIN_TRUSTED_CIDRS: ${ADMIN_TRUSTED_CIDRS}
       ADMIN_REQUIRE_BOTH: ${ADMIN_REQUIRE_BOTH}
